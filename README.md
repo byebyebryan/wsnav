@@ -5,28 +5,26 @@ coding-agent workstreams on the machine where it is running. It adds
 organization, attachment, status, and a few compound workstream actions
 around the provider's native terminal UI.
 
-> **D25 status:** the immediate shell-first exit correction is locally,
-> declared-Rust-1.88, remotely, and live-provider accepted.
-> The locked release is installed byte-identically for operator inspection
-> with executable SHA-256
-> `1cb2518100afdb2dd1944674a4e59c690495bb31d90673ae3a89b22c2a738e5d`.
-> Provider exit now converges through the initial Shell-to-provider promotion
-> path even when the provisional tmux pane was seeded before the shell changed
-> into the canonical project directory. That exception requires the exact
-> current-generation `provider_exec_proven` target; ordinary Runtimes retain
-> strict launch-cwd proof. Linux process disappearance, tmux exit publication,
-> post-exit process-group drain, and marker-retirement races remain bounded
-> without converting ambiguity into absence or signaling an unproven group.
-> Native attachment also has an exact read-only process/dead-pane monitor for
-> tmux versions that can retain a dead pane without firing `pane-died`; only
-> one exact dead provider pane can detach clients, and reconciliation remains
-> separately revision-fenced.
-> Sanitized immediate native-exit acceptance with Codex 0.153.2 and OpenCode
-> 1.18.27 passes on this exact artifact. GitHub CI run `33934362831` passes
-> both the full check and declared Rust 1.88 jobs for implementation commit
-> `dbce1837e6a6d250b673f3f423f255e1b02af15f`.
-> No current UI capture was generated. See the
-> [D25 acceptance record](docs/evidence/acceptance/d25-current-product-closure.md).
+> **D26 status:** implementation is complete without changing the D24 product
+> surface or schema 15. The final reviewed source passes the full local,
+> declared-Rust-1.88, and remote gates. Its locked release is installed
+> byte-identically for operator inspection with executable SHA-256
+> `3bfccf4e63038174a6e92b68cdbf8103184b8d4a2f41e58055f13df278292ca7`.
+> After an exact native zero-exit candidate is established, the attachment
+> helper may retry only the bounded final process-group-drain condition; every
+> attempt renews revisions, Runtime and provider identity, retained-pane
+> topology/cwd/status, and group-emptiness proof. Changed, nonzero, stale,
+> inaccessible, or otherwise ambiguous evidence still refuses immediately
+> without signaling or mutation. Final review also closes the adjacent
+> Archive-to-Forget race for an exact already-stopped provider.
+> GitHub CI run `34328413481` passes the full check and declared Rust 1.88 jobs
+> for implementation commit `988c0068a883065441c397bc0cbb7ce83f6140ff`.
+> Sanitized OpenCode 1.18.29 and operator-reviewed Codex 0.153.4 lifecycle
+> acceptance remains bound to the pre-review candidate
+> `02ba1bde39be9fdd0c275497a7ebfd02a40d055fd2440a54c8fc2e832f820d60`;
+> exact-final-artifact live reacceptance remains open. Current capture remains
+> operator-owned and is not acceptance evidence. See the
+> [D26 acceptance record](docs/evidence/acceptance/d26-post-reattach-exit.md).
 
 > **D24 status:** locally accepted and installed byte-identically for operator
 > inspection with executable SHA-256
@@ -203,9 +201,11 @@ migration, state rollback, automatic downgrade, or compatibility launcher.
 
 ## Build, install, and CLI
 
-WSNav remains source-installed. This host runs the byte-identical corrected
-D25 artifact recorded in the D25 acceptance document; the prior D25 and D18
-acceptance results remain bound to their older exact artifacts. Build and
+WSNav remains source-installed. This host runs the byte-identical final D26
+artifact recorded in the D26 acceptance document. Its local, declared-Rust-1.88,
+and remote results apply to that implementation; live-provider results remain
+bound to the recorded pre-review candidate. Prior D25 and D18 acceptance
+results likewise remain bound to their older exact artifacts. Build and
 validate any replacement before atomically installing its exact release
 artifact:
 
@@ -224,10 +224,12 @@ operations remain optional scripting, diagnostics, and break-glass parity;
 `wsnav forget <workstream-id> <revision>` is the revision-fenced equivalent of
 the Archived `x` action.
 Ordinary work happens in the Navigator/provider presentation. D18 retains the
-historical destructive-reset and native observer-trust evidence. D25 records
-the current corrected installation and sanitized Codex/OpenCode lifecycle
-acceptance on that exact artifact. GitHub CI run `33934362831` passes both the
-full check and declared Rust 1.88 jobs for the implementation commit.
+historical destructive-reset and native observer-trust evidence. D25 retains
+its earlier exact-artifact acceptance boundary. D26 records the current
+installation, the final implementation's local, declared-Rust-1.88, and remote
+results, and the separate pre-review Codex/OpenCode lifecycle acceptance.
+GitHub CI run `34328413481` passes both jobs for implementation commit
+`988c006`.
 
 ## See it
 

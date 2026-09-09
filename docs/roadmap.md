@@ -13,7 +13,9 @@ retained for the pre-review candidate
 `02ba1bde39be9fdd0c275497a7ebfd02a40d055fd2440a54c8fc2e832f820d60`;
 exact-final-artifact live reacceptance remains open. D25's prior corrected
 artifact and GitHub CI run `33934362831` retain their historical acceptance
-boundary. D18 checkpoint `c961c7e` retains the older separately authorized
+boundary. GitHub CI run `34328413481` passes the full check and declared Rust
+1.88 jobs for D26 implementation commit `988c006`. D18 checkpoint `c961c7e`
+retains the older separately authorized
 destructive-reset and native observer-trust evidence.
 
 `docs/design.md` is the product and architecture contract. This file owns
@@ -37,10 +39,12 @@ roadmap is preserved as
 ## Completed checkpoint: D26 managed post-reattach exit convergence
 
 Implementation status: the final reviewed candidate passes the full local and
-declared Rust 1.88 gates and is byte-identically installed. The pre-review
-candidate passes sanitized OpenCode 1.18.29 and operator-reviewed Codex 0.153.4
-lifecycle acceptance with complete disposable cleanup; that evidence is not
-attributed to the final artifact, whose live reacceptance remains open.
+declared Rust 1.88 gates, GitHub CI run `34328413481` passes both jobs for
+implementation commit `988c006`, and the release is byte-identically
+installed. The pre-review candidate passes sanitized OpenCode 1.18.29 and
+operator-reviewed Codex 0.153.4 lifecycle acceptance with complete disposable
+cleanup; that evidence is not attributed to the final artifact, whose live
+reacceptance remains open.
 
 D26 corrects the live-falsified managed direct-Runtime attachment-end path.
 OpenCode onboarding, immediate native exit, reopen, and exact same-process

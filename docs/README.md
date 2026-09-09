@@ -2,6 +2,39 @@
 
 ## Status and authority
 
+### D26 managed post-reattach exit convergence
+
+D26 corrects the live-falsified managed attachment-end path without changing
+the D24 product surface or schema 15. After an exact native zero-exit candidate
+is established, only a still-draining recorded process group can enter the
+dedicated bounded retry window. Every attempt reopens current state and
+re-proves Workstream and Runtime revisions, Runtime generation, provider
+identity, retained-pane PID/topology/cwd/zero status, and group emptiness. A
+nonzero exit, changed or stale revision, reused or inaccessible identity,
+mismatched topology, or any other ambiguity refuses immediately without
+signaling or mutation.
+
+Final review ends retry authority permanently after the group is first seen
+empty if exit evidence changes or the group reappears. It also closes the
+adjacent Archive-to-Forget race: an already stopped Runtime with a missing
+private server may skip redundant provider signaling only when the provider is
+absent, or is the exact same-birth zombie, and its recorded group is empty.
+D26 adds no public command, key, page, status, schema, provider traffic,
+transcript/capture storage, or automatic relaunch.
+
+D0-D25 are complete, and D26 implementation is complete. The final reviewed
+source passes the full local, declared Rust 1.88, and remote gates. Its locked
+release is installed byte-identically for operator inspection with SHA-256
+`3bfccf4e63038174a6e92b68cdbf8103184b8d4a2f41e58055f13df278292ca7`.
+GitHub CI run `34328413481` passes the full check and declared Rust 1.88 jobs
+for implementation commit `988c006`. Sanitized OpenCode 1.18.29 and
+operator-reviewed Codex 0.153.4 lifecycle acceptance remains bound to the
+pre-review candidate
+`02ba1bde39be9fdd0c275497a7ebfd02a40d055fd2440a54c8fc2e832f820d60`;
+exact-final-artifact live reacceptance remains open. Current capture remains
+operator-owned and outside acceptance. See the
+[D26 acceptance record](evidence/acceptance/d26-post-reattach-exit.md).
+
 ### D25 current-product stabilization
 
 D25 closes the current product around the already-settled shell-first,
@@ -35,15 +68,15 @@ evidence. A stopped Runtime left with an exact retained zero-status pane by an
 older helper is removed before its next generation is reserved; live,
 non-zero, reused, malformed, or inaccessible evidence remains fail-closed.
 
-D0-D25 are complete. The locked D25 release is installed byte-identically for
-operator inspection with SHA-256
+D25's locked release was installed byte-identically for operator inspection
+with SHA-256
 `1cb2518100afdb2dd1944674a4e59c690495bb31d90673ae3a89b22c2a738e5d`.
-The corrected source passes the full local disposable gate. Sanitized
+That corrected source passed the full local disposable gate. Sanitized
 immediate native-exit acceptance with Codex 0.153.2 and OpenCode 1.18.27
-passes on the exact installed artifact. GitHub CI run `33934362831` passes the
+passed on that exact artifact. GitHub CI run `33934362831` passed the
 full check and declared Rust 1.88 jobs for implementation commit `dbce183`.
-Current UI capture generation was left to the operator and is not acceptance
-evidence. See the
+This remains historical D25 evidence rather than authority for the current D26
+artifact. See the
 [D25 acceptance record](evidence/acceptance/d25-current-product-closure.md).
 
 ### D24 archived catalog and forget
@@ -124,7 +157,7 @@ the [D19 acceptance record](evidence/acceptance/d19-tmux-navigation.md).
 
 ## Current operator contract
 
-This section describes the locally installed D25 development artifact. D18
+This section describes the locally installed D26 development artifact. D18
 retains the older destructive-reset and native observer-trust evidence.
 
 WSNav is host-local. Run it on the machine where the provider Runtime lives.
@@ -440,14 +473,15 @@ and complete disposable cleanup.
 
 ## Build and command references
 
-The project is a source-installed operator beta. This host's installed
-corrected D25 development artifact opens only schema 15 and its `wsnav --help`
-is the installed CLI reference. A host must not be described as running a
-candidate until its artifact is built, checked, atomically installed, and
+The project is a source-installed operator beta. This host's installed final
+D26 development artifact opens only schema 15 and its `wsnav --help` is the
+installed CLI reference. A host must not be described as running a candidate
+until its artifact is built, checked, atomically installed, and
 checksum-verified there. Run
 `cargo build --locked --release` and `scripts/check` before any
-replacement. D25 records the corrected local/disposable result separately
-from the prior artifact's sanitized live-provider acceptance and D18's
-destructive reset and native observer trust; there is no state rollback. The
-normal workflow remains the Navigator beside either the provisional account
-shell or the native provider TUI.
+replacement. D26 records the final implementation's local,
+declared-Rust-1.88, and remote results separately from the pre-review
+candidate's sanitized live-provider acceptance. D25 and D18 retain their older
+exact-artifact, destructive-reset, and native-observer-trust boundaries; there
+is no state rollback. The normal workflow remains the Navigator beside either
+the provisional account shell or the native provider TUI.

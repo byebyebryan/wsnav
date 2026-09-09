@@ -14,6 +14,8 @@ Codex 0.153.4 remains bound to the pre-review D26 candidate
 exact-final-artifact live reacceptance remains open. D25's executable
 `1cb2518100afdb2dd1944674a4e59c690495bb31d90673ae3a89b22c2a738e5d`
 and GitHub CI run `33934362831` retain their historical acceptance boundary.
+GitHub CI run `34328413481` passes the full check and declared Rust 1.88 jobs
+for D26 implementation commit `988c006`.
 D18 checkpoint `c961c7e` retains the older separately accepted
 destructive-reset and native observer-trust evidence.
 

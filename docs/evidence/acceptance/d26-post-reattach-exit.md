@@ -5,7 +5,8 @@ declared-Rust-1.88 validated and installed byte-identically for operator
 inspection. The live-falsified OpenCode 1.18.29 sequence and an
 operator-reviewed Codex 0.153.4 sequence passed on the pre-review candidate;
 that acceptance is not attributed to the final artifact, whose live
-reacceptance remains open. No remote-CI result is claimed.
+reacceptance remains open. GitHub CI run `34328413481` passes the full check and
+declared Rust 1.88 jobs for implementation commit `988c006`.
 
 ## Contract exercised
 
@@ -57,6 +58,9 @@ A fresh `rust:1.88-bookworm` container with Rust 1.88.0, tmux 3.3a, and Zsh 5.9
 passed the locked all-targets/all-features matrix serially: the same 435 library
 tests and 11 presentation integration tests. The container copied only the
 current source into disposable storage and was removed after the run.
+
+GitHub CI run `34328413481` independently passed both the full `check` and
+declared Rust 1.88 `msrv` jobs for implementation commit `988c006`.
 
 Three failed review runs remain diagnosis evidence, not acceptance. The first
 exposed an exact same-birth zombie between Archive and immediate Forget; the
