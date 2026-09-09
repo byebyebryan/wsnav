@@ -7,7 +7,7 @@ the OpenCode 1.18.29 post-reattach clean-exit falsification without changing
 the D24 product surface or schema 15. The final reviewed source passes the full
 local and declared Rust 1.88 gates, and the locked release is byte-identically
 installed with SHA-256
-`351fdb7b1ed24f88613e1e2b9121463d5a18be14ea945507c5757ed93bbf64b7`.
+`3bfccf4e63038174a6e92b68cdbf8103184b8d4a2f41e58055f13df278292ca7`.
 Sanitized OpenCode 1.18.29 and operator-reviewed Codex 0.153.4 acceptance is
 retained for the pre-review candidate
 `02ba1bde39be9fdd0c275497a7ebfd02a40d055fd2440a54c8fc2e832f820d60`;

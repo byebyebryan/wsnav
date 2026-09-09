@@ -68,8 +68,8 @@ blank status with the fixture's exact same-birth zombie after its deterministic
 `exit 0`. The final fresh container passed afterward.
 
 The final locked release and installed executable are both `wsnav 0.1.0`, mode
-`0755`, size 7,393,376 bytes, and SHA-256
-`351fdb7b1ed24f88613e1e2b9121463d5a18be14ea945507c5757ed93bbf64b7`.
+`0755`, size 7,393,416 bytes, and SHA-256
+`3bfccf4e63038174a6e92b68cdbf8103184b8d4a2f41e58055f13df278292ca7`.
 
 ## Sanitized OpenCode acceptance on the pre-review candidate
 
