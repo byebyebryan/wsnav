@@ -12,7 +12,10 @@ use std::{
 use wsnav::{
     domain::{RandomIdGenerator, RuntimeId},
     presentation::{Presentation, PresentationAction, PresentationPaths},
-    runtime::{NativeLaunch, PrivateRuntime, RuntimePaths, SystemTmux},
+    runtime::{
+        NativeLaunch, PrivateRuntime, ProcessProbe, ProcessState, RuntimePaths, RuntimeProbe,
+        SystemTmux,
+    },
     state,
 };
 
@@ -719,6 +722,137 @@ fn nested_runtime_literal_ctrl_b_reaches_the_provider_as_one_byte() {
     runtime.park().unwrap();
     let _ = outer_client.kill();
     let _ = outer_client.wait();
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the exact outer/inner lifecycle is intentionally linear in this regression"
+)]
+fn nested_runtime_survives_outer_detach_reuse_then_retains_zero_exit_evidence() {
+    if !tmux_available() {
+        eprintln!("skipped: tmux is unavailable");
+        return;
+    }
+
+    let state_root = tempfile::tempdir().unwrap();
+    let exit_marker = state_root.path().join("provider-exit");
+    let runtime_paths = RuntimePaths::for_runtime(state_root.path(), RuntimeId::new());
+    let _runtime_guard = PrivateTmuxGuard {
+        directory: runtime_paths.directory.clone(),
+        socket: runtime_paths.socket.clone(),
+    };
+    let tmux = SystemTmux::default();
+    let process_probe = wsnav::runtime::LinuxProcessProbe;
+    let runtime = PrivateRuntime::new(&tmux, &process_probe, runtime_paths.clone());
+    let provider_program = format!(
+        "while [ ! -e {} ]; do sleep 0.01; done; exit 0",
+        shell_quote_for_test(&exit_marker),
+    );
+    runtime
+        .start(&NativeLaunch {
+            cwd: state_root.path().to_path_buf(),
+            program: vec![
+                OsString::from("/bin/sh"),
+                OsString::from("-c"),
+                OsString::from(provider_program),
+            ],
+            environment: std::collections::BTreeMap::new(),
+        })
+        .unwrap();
+    let (provider_pid, provider_birth) = match runtime.probe().unwrap() {
+        RuntimeProbe::Live {
+            pane_pid,
+            process_birth: Some(process_birth),
+            ..
+        } => (pane_pid, process_birth),
+        other => panic!("provider fixture did not become exact and live: {other:?}"),
+    };
+
+    let outer_root = tempfile::tempdir().unwrap();
+    let outer_socket = outer_root.path().join("outer.sock");
+    let outer_session = "outer";
+    let _outer_guard = PrivateTmuxGuard {
+        directory: outer_root.path().to_path_buf(),
+        socket: outer_socket.clone(),
+    };
+    let status = tmux_command(&outer_socket)
+        .args([
+            "new-session",
+            "-d",
+            "-s",
+            outer_session,
+            SLEEP_PROGRAM,
+            "60",
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let nested_attach = format!(
+        "unset TMUX; exec tmux -u -S {} attach-session -t {}",
+        shell_quote_for_test(&runtime_paths.socket),
+        shell_quote_for_test(Path::new(&runtime_paths.session_name)),
+    );
+    let status = tmux_command(&outer_socket)
+        .args(["split-window", "-d", "-t", "outer:0.0"])
+        .arg(nested_attach)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let mut outer_client = attach_tmux_session_client(&outer_socket, outer_session);
+    let inner_before = wait_for_runtime_client(&runtime_paths.socket);
+    send_client_keys(&mut outer_client, b"\x02d");
+    let deadline = Instant::now() + READINESS_TIMEOUT;
+    while outer_client.try_wait().unwrap().is_none() && Instant::now() < deadline {
+        thread::sleep(READINESS_POLL);
+    }
+    assert!(
+        outer_client.try_wait().unwrap().is_some(),
+        "outer presentation client did not detach"
+    );
+
+    let mut reattached_outer_client = attach_tmux_session_client(&outer_socket, outer_session);
+    assert_eq!(wait_for_runtime_client(&runtime_paths.socket), inner_before);
+
+    fs::write(&exit_marker, b"exit").unwrap();
+    let deadline = Instant::now() + READINESS_TIMEOUT;
+    let retained_zero_exit = loop {
+        let pane_is_dead =
+            pane_dead(&runtime_paths.socket, &runtime_paths.session_name, "0.0") == Some(true);
+        let status = tmux_output(
+            &runtime_paths.socket,
+            [
+                "display-message",
+                "-p",
+                "-t",
+                &format!("{}:0.0", runtime_paths.session_name),
+                "#{pane_dead_status}",
+            ],
+        );
+        let process = process_probe
+            .process_observation_checked(provider_pid)
+            .unwrap();
+        let normal_tmux_exit = status.trim() == "0" && process.is_none();
+        let bookworm_zombie_exit = status.trim().is_empty()
+            && process.is_some_and(|observation| {
+                observation.birth == provider_birth && observation.state == ProcessState::Zombie
+            });
+        if pane_is_dead && (normal_tmux_exit || bookworm_zombie_exit) {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        thread::sleep(READINESS_POLL);
+    };
+    assert!(
+        retained_zero_exit,
+        "nested Runtime did not retain a cross-version zero-exit candidate"
+    );
+
+    let _ = reattached_outer_client.kill();
+    let _ = reattached_outer_client.wait();
 }
 
 fn tmux_available() -> bool {

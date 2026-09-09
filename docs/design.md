@@ -1,19 +1,64 @@
 # Workstream Navigator V1 Design
 
-Date: 2026-09-04
+Date: 2026-09-09
 
-Status: D25 is complete in this checkpoint, developed from `076b0a7`, with an
-immediate shell-first exit correction after operator falsification. The
-corrected full local/disposable, remote, declared Rust 1.88, and live-provider
-gates pass. The locked release is byte-identically installed for operator
-inspection with executable
-SHA-256
-`1cb2518100afdb2dd1944674a4e59c690495bb31d90673ae3a89b22c2a738e5d`,
-and sanitized native-exit acceptance on that exact artifact passes with Codex
-0.153.2 and OpenCode 1.18.27. Schema 15 and the D24 product surface are
-unchanged. GitHub CI run `33934362831` passes both jobs for implementation
-commit `dbce183`. D18 checkpoint `c961c7e` retains the older separately
-accepted destructive-reset and native observer-trust evidence.
+Status: D0-D25 are complete. D26's implementation corrects the OpenCode 1.18.29
+post-reattach clean-exit falsification without changing the D24 product surface
+or schema 15. The final reviewed source passes the full local and declared Rust
+1.88 gates, and its locked release is byte-identically installed for operator
+inspection with SHA-256
+`351fdb7b1ed24f88613e1e2b9121463d5a18be14ea945507c5757ed93bbf64b7`.
+Sanitized lifecycle acceptance with OpenCode 1.18.29 and operator-reviewed
+Codex 0.153.4 remains bound to the pre-review D26 candidate
+`02ba1bde39be9fdd0c275497a7ebfd02a40d055fd2440a54c8fc2e832f820d60`;
+exact-final-artifact live reacceptance remains open. D25's executable
+`1cb2518100afdb2dd1944674a4e59c690495bb31d90673ae3a89b22c2a738e5d`
+and GitHub CI run `33934362831` retain their historical acceptance boundary.
+D18 checkpoint `c961c7e` retains the older separately accepted
+destructive-reset and native observer-trust evidence.
+
+### D26 managed post-reattach exit convergence
+
+D26 corrects one lifecycle gap without changing the D24 product surface or
+schema 15. On OpenCode 1.18.29, a disposable managed Runtime passed onboarding,
+immediate native exit, reopen, and exact same-process presentation
+detach/reattach. A later native clean exit terminated the provider but left the
+Workstream open/starting with a retained dead Runtime pane. The specimen was
+cleaned after sanitized metadata-only evidence; D25 acceptance remains bound to
+the exact versions and flows it recorded.
+
+Presentation reuse remains non-authoritative and must not respawn or replace a
+live Runtime attachment. The provider-pane helper remains the only owner that
+may hand a returned native attachment to the revision-fenced lifecycle
+reconciler. Runtime tmux hooks and process monitoring may detach only the exact
+nested client; the OpenCode observer may report provider evidence but does not
+gain cleanup or registry-mutation authority.
+
+After an exact native clean-exit candidate is established, a temporary failure
+of the final cleanup proof may receive a dedicated bounded retry window in that
+same helper. Every attempt rereads the Workstream and Runtime revisions, exact
+pane identity, topology, cwd, exit status, provider identity, and process-group
+state. No prior observation becomes authority. Nonzero exit, changed or stale
+revision, reused or inaccessible process identity, mismatched topology or cwd,
+conflicting status, and every other ambiguous condition remain immediate
+closed refusals with no signaling or mutation. The shared generic-stop timeout
+and Archive semantics do not change, and no indefinite monitor is introduced.
+
+Final review tightened two adjacent refusal boundaries. Once a clean-exit
+group is observed empty, changed exit evidence or a reappearing group refuses
+immediately and never regains retry authority. An already stopped Runtime whose
+private server is missing may skip a redundant provider signal only when the
+provider is absent, or is the exact same-birth zombie, and the recorded process
+group is empty. A live exact provider still uses ordinary identity-proven
+shutdown; changed, partial, nonempty, or unreadable evidence refuses.
+
+D26 adds no public command, key, page, status, lifecycle, provider-thread
+action, schema migration, transcript/capture storage, provider-pane traffic,
+project cleanup, compatibility route, or automatic relaunch. Acceptance
+requires deterministic direct-Runtime and nested-presentation regressions,
+the complete repository gate, declared Rust 1.88-equivalent validation, an
+exact installed artifact, and sanitized current-provider lifecycle evidence
+with complete cleanup.
 
 ### D25 current-product stabilization
 

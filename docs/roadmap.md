@@ -1,20 +1,20 @@
 # Workstream Navigator V1 Roadmap
 
-Date: 2026-09-04
+Date: 2026-09-09
 
-Status: D0-D25 implementation is complete. D25, developed from `076b0a7`, now
-includes an immediate shell-first exit correction after operator
-falsification. The corrected source passes the full local/disposable, remote,
-and declared Rust 1.88 gates. Its locked release is byte-identically installed
-for operator inspection with executable SHA-256
-`1cb2518100afdb2dd1944674a4e59c690495bb31d90673ae3a89b22c2a738e5d`,
-and sanitized native-exit acceptance on that exact artifact passes with Codex
-0.153.2 and OpenCode 1.18.27. D25 stabilizes the existing D24 surface and
-schema 15; it adds no user-facing session-management capability. GitHub CI run
-`33934362831` passes the full check and declared Rust 1.88 jobs for
-implementation commit `dbce183`.
-D18 checkpoint `c961c7e` retains the older separately
-authorized destructive-reset and native observer-trust evidence.
+Status: D0-D25 are complete, and D26 implementation is complete. D26 corrects
+the OpenCode 1.18.29 post-reattach clean-exit falsification without changing
+the D24 product surface or schema 15. The final reviewed source passes the full
+local and declared Rust 1.88 gates, and the locked release is byte-identically
+installed with SHA-256
+`351fdb7b1ed24f88613e1e2b9121463d5a18be14ea945507c5757ed93bbf64b7`.
+Sanitized OpenCode 1.18.29 and operator-reviewed Codex 0.153.4 acceptance is
+retained for the pre-review candidate
+`02ba1bde39be9fdd0c275497a7ebfd02a40d055fd2440a54c8fc2e832f820d60`;
+exact-final-artifact live reacceptance remains open. D25's prior corrected
+artifact and GitHub CI run `33934362831` retain their historical acceptance
+boundary. D18 checkpoint `c961c7e` retains the older separately authorized
+destructive-reset and native observer-trust evidence.
 
 `docs/design.md` is the product and architecture contract. This file owns
 delivery order, implementation status, and exit gates. The complete prior
@@ -33,6 +33,75 @@ roadmap is preserved as
   ambiguity handling.
 - D18 is a clean state break. Schemas 12 through 14 are refusal evidence, not
   migration or adoption inputs.
+
+## Completed checkpoint: D26 managed post-reattach exit convergence
+
+Implementation status: the final reviewed candidate passes the full local and
+declared Rust 1.88 gates and is byte-identically installed. The pre-review
+candidate passes sanitized OpenCode 1.18.29 and operator-reviewed Codex 0.153.4
+lifecycle acceptance with complete disposable cleanup; that evidence is not
+attributed to the final artifact, whose live reacceptance remains open.
+
+D26 corrects the live-falsified managed direct-Runtime attachment-end path.
+OpenCode onboarding, immediate native exit, reopen, and exact same-process
+presentation detach/reattach passed. A subsequent native clean exit terminated
+the provider but left the Workstream open/starting with a retained dead Runtime
+pane. The failure is consistent with a one-shot post-exit reconciliation
+refusal becoming permanent; current evidence does not establish provider
+version causation.
+
+Scope:
+
+- preserve presentation reuse, the existing provider-pane helper as the only
+  attachment-end handoff owner, and the separate non-mutating tmux
+  hook/process monitor and OpenCode observer boundaries;
+- establish an exact native clean-exit candidate before retry is eligible, then
+  use a dedicated bounded retry window whose every attempt rereads and fences
+  current Workstream/Runtime revisions, provider identity, retained pane PID,
+  topology, cwd, zero-exit evidence, and process-group emptiness;
+- retry only a classified transient final-cleanup condition; refuse nonzero,
+  stale, changed, reused, inaccessible, malformed, mismatched, or ambiguous
+  evidence immediately without signaling or mutation;
+- after an observed empty final group, treat changed exit evidence or a
+  reappearing group as terminal ambiguity rather than renewed retry authority;
+- let immediate Archive-to-Forget recognize an already stopped, missing
+  Runtime only when its former provider is absent or the exact same-birth
+  zombie and the recorded group is empty, while preserving exact shutdown for
+  a live provider and refusing every changed, partial, nonempty, or unreadable
+  case;
+- add deterministic OpenCode-shaped action coverage and a nested-presentation
+  regression for same-Runtime detach/reattach followed by zero exit, plus live
+  detach, nonzero exit, changed evidence, timeout, and cleanup refusal cases;
+- run the complete locked repository gate and declared Rust 1.88-equivalent
+  validation, then build and atomically install the exact release; and
+- rerun explicitly authorized sanitized OpenCode 1.18.29 lifecycle acceptance
+  with complete cleanup, followed by Codex 0.153.4 reacceptance once isolated
+  native observer trust is operator-reviewed.
+
+Non-goals:
+
+- do not add or restore Fork, Rename, Ack, Park/Unpark, provider-thread
+  archive/delete, transcript preview, bulk pruning, or another public action;
+- do not change presentation reuse, observer mutation authority, Archive or
+  Restore semantics, the shared generic-stop timeout, schema 15, or provider
+  command traffic; and
+- do not introduce an indefinite monitor, compatibility behavior, pane capture,
+  content persistence, project cleanup, packaging scope, or automatic relaunch.
+
+Exit gate:
+
+- focused regressions prove exact clean-exit retry eligibility, full proof
+  renewal, eventual zero-exit convergence, live detach preservation, and
+  immediate nonzero/ambiguous refusal without fixed scheduling or pane capture;
+- composed private-tmux, action, and helper-loop coverage proves presentation
+  detach/reattach preserves the exact live Runtime, retains a later zero-exit
+  candidate, and converges it to stopped state with no retained Runtime server,
+  socket, OpenCode handle, or fixture process;
+- `scripts/check` passes formatting, strict Clippy, all disposable tests,
+  packaging, dependency policy, documentation links, and source boundaries;
+- declared Rust 1.88-equivalent validation passes; and
+- the installed artifact is byte-identical to the locked release and sanitized
+  current-provider acceptance is recorded truthfully with complete cleanup.
 
 ## Completed checkpoint: D25 current-product stabilization and closure
 
@@ -883,6 +952,7 @@ historical evidence rather than current delivery authority.
 | D23 | Provider-native stop; public Park retired and archive/restore made contextual | [D23 acceptance](evidence/acceptance/d23-native-stop-contextual-visibility.md) |
 | D24 | Archived secondary catalog and WSNav-owned Forget; locally accepted and installed for inspection | [D24 evidence](evidence/acceptance/d24-archived-catalog-forget.md) |
 | D25 | Current-product lifecycle stabilization; corrected local artifact installed, prior artifact retains MSRV and sanitized live-provider evidence | [D25 evidence](evidence/acceptance/d25-current-product-closure.md) |
+| D26 | Managed post-reattach exit convergence; implementation, local, and MSRV complete; pre-review live acceptance retained, exact final live acceptance open | [D26 evidence](evidence/acceptance/d26-post-reattach-exit.md) |
 
 ## Deferred product decisions
 

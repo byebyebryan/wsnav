@@ -617,34 +617,61 @@ fn attach_runtime_with_outcome(
 /// only after its durable Runtime/Workstream outcome is visible; otherwise the
 /// exact retained pane must prove either a still-live provider or a clean
 /// native exit.
+const POST_EXIT_RETRY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const POST_EXIT_RETRY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+
 fn finish_runtime_attachment(
     root: &StateRoot,
     record: &crate::state::RuntimeRecord,
     status: std::process::ExitStatus,
 ) -> Result<RuntimeAttachmentEnd, AppError> {
-    let reconciliation = (|| {
-        let state = crate::state::open_current(&StateRoot::select(root.base()))?;
-        let mut registry = state.into_host_registry()?;
-        crate::actions::reconcile_provider_attachment_end(
-            root,
-            &mut registry,
-            record.workstream_id,
-            record.runtime_id,
-            &record.tmux_generation,
-        )
-        .map_err(AppError::from)
-    })();
+    let mut retry_fence = None;
+    let mut retry_deadline = None;
+    let reconciliation = reconcile_attachment_end_until_terminal(
+        || {
+            let state = crate::state::open_current(&StateRoot::select(root.base()))?;
+            let mut registry = state.into_host_registry()?;
+            let disposition = crate::actions::reconcile_provider_attachment_end(
+                root,
+                &mut registry,
+                record.workstream_id,
+                record.runtime_id,
+                &record.tmux_generation,
+                retry_fence,
+            )
+            .map_err(AppError::from)?;
+            retry_fence = match disposition {
+                crate::actions::AttachmentEndDisposition::RetryableCleanExit(fence) => Some(fence),
+                crate::actions::AttachmentEndDisposition::Detached
+                | crate::actions::AttachmentEndDisposition::Complete => None,
+            };
+            Ok(disposition)
+        },
+        || {
+            let deadline = retry_deadline
+                .get_or_insert_with(|| std::time::Instant::now() + POST_EXIT_RETRY_TIMEOUT);
+            std::time::Instant::now() < *deadline
+        },
+        || std::thread::sleep(POST_EXIT_RETRY_POLL_INTERVAL),
+    );
 
     match reconciliation {
-        Ok(true) => Ok(RuntimeAttachmentEnd::Stopped),
-        Ok(false) if status.success() => Ok(RuntimeAttachmentEnd::Detached),
-        Ok(false) => {
+        Ok(crate::actions::AttachmentEndDisposition::Complete) => Ok(RuntimeAttachmentEnd::Stopped),
+        Ok(crate::actions::AttachmentEndDisposition::Detached) if status.success() => {
+            Ok(RuntimeAttachmentEnd::Detached)
+        }
+        Ok(crate::actions::AttachmentEndDisposition::Detached) => {
             if crate::actions::await_deliberate_park(root, record.runtime_id, record.workstream_id)?
             {
                 Ok(RuntimeAttachmentEnd::Stopped)
             } else {
                 Err(AppError::AttachFailed)
             }
+        }
+        // `reconcile_attachment_end_until_terminal` consumes this disposition
+        // until it either completes or returns the bounded terminal refusal.
+        Ok(crate::actions::AttachmentEndDisposition::RetryableCleanExit(_)) => {
+            Err(crate::actions::ActionError::RuntimeProbeAmbiguous.into())
         }
         Err(error) => {
             if crate::actions::await_deliberate_park(root, record.runtime_id, record.workstream_id)?
@@ -653,6 +680,34 @@ fn finish_runtime_attachment(
             } else {
                 Err(error)
             }
+        }
+    }
+}
+
+/// Renews an attachment-end proof only when lifecycle classified the prior
+/// attempt as a clean, exact native exit whose final process-group drain is
+/// temporarily pending. Every closure invocation opens fresh durable state and
+/// re-proves all retained-pane facts; errors and all other dispositions remain
+/// terminal.
+fn reconcile_attachment_end_until_terminal<R, C, W>(
+    mut reconcile: R,
+    mut before_deadline: C,
+    mut wait: W,
+) -> Result<crate::actions::AttachmentEndDisposition, AppError>
+where
+    R: FnMut() -> Result<crate::actions::AttachmentEndDisposition, AppError>,
+    C: FnMut() -> bool,
+    W: FnMut(),
+{
+    loop {
+        match reconcile()? {
+            crate::actions::AttachmentEndDisposition::RetryableCleanExit(_) => {
+                if !before_deadline() {
+                    return Err(crate::actions::ActionError::RuntimeProbeAmbiguous.into());
+                }
+                wait();
+            }
+            disposition => return Ok(disposition),
         }
     }
 }
@@ -732,10 +787,16 @@ pub(super) fn provider_wait() -> Result<(), AppError> {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::Cell, collections::VecDeque};
+
     use uuid::Uuid;
 
-    use super::{adjacent_cycle_candidate, clear_stopped_provider_surface_to};
+    use super::{
+        adjacent_cycle_candidate, clear_stopped_provider_surface_to,
+        reconcile_attachment_end_until_terminal,
+    };
     use crate::{
+        actions::{ActionError, AttachmentEndDisposition, AttachmentEndRetryFence},
         domain::{
             LocationId, ProjectId, ProviderKind, Revision, WorkstreamId, WorkstreamLifecycle,
         },
@@ -767,6 +828,80 @@ mod tests {
         clear_stopped_provider_surface_to(&mut output).unwrap();
 
         assert_eq!(output, b"\x1b[0m\x1b[2J\x1b[1;1H\x1b[?25h");
+    }
+
+    #[test]
+    fn clean_exit_retry_reproves_until_the_typed_candidate_completes() {
+        let fence = AttachmentEndRetryFence {
+            workstream_revision: Revision::INITIAL,
+            runtime_revision: Revision::INITIAL,
+        };
+        let mut outcomes = VecDeque::from([
+            Ok(AttachmentEndDisposition::RetryableCleanExit(fence)),
+            Ok(AttachmentEndDisposition::Complete),
+        ]);
+        let waits = Cell::new(0_u8);
+
+        assert_eq!(
+            reconcile_attachment_end_until_terminal(
+                || outcomes.pop_front().unwrap(),
+                || true,
+                || waits.set(waits.get() + 1),
+            )
+            .unwrap(),
+            AttachmentEndDisposition::Complete,
+        );
+        assert_eq!(waits.get(), 1);
+        assert!(outcomes.is_empty());
+    }
+
+    #[test]
+    fn clean_exit_retry_refuses_when_its_dedicated_window_expires() {
+        let fence = AttachmentEndRetryFence {
+            workstream_revision: Revision::INITIAL,
+            runtime_revision: Revision::INITIAL,
+        };
+        let attempts = Cell::new(0_u8);
+        let waits = Cell::new(0_u8);
+        let remaining_windows = Cell::new(1_u8);
+
+        let result = reconcile_attachment_end_until_terminal(
+            || {
+                attempts.set(attempts.get() + 1);
+                Ok(AttachmentEndDisposition::RetryableCleanExit(fence))
+            },
+            || {
+                let remaining = remaining_windows.get();
+                remaining_windows.set(remaining.saturating_sub(1));
+                remaining > 0
+            },
+            || waits.set(waits.get() + 1),
+        );
+
+        assert!(matches!(
+            result,
+            Err(super::super::model::AppError::Action(
+                ActionError::RuntimeProbeAmbiguous
+            ))
+        ));
+        assert_eq!(attempts.get(), 2);
+        assert_eq!(waits.get(), 1);
+    }
+
+    #[test]
+    fn clean_exit_retry_never_retries_an_unclassified_refusal() {
+        let waits = Cell::new(0_u8);
+        assert!(matches!(
+            reconcile_attachment_end_until_terminal(
+                || Err(ActionError::RuntimeProbeAmbiguous.into()),
+                || panic!("terminal refusal must not consume retry time"),
+                || waits.set(waits.get() + 1),
+            ),
+            Err(super::super::model::AppError::Action(
+                ActionError::RuntimeProbeAmbiguous
+            ))
+        ));
+        assert_eq!(waits.get(), 0);
     }
 
     #[test]

@@ -57,6 +57,8 @@ to make their old procedures appear current.
   Forget](acceptance/d24-archived-catalog-forget.md)
 - [D25 current-product stabilization and
   closure](acceptance/d25-current-product-closure.md)
+- [D26 managed post-reattach exit
+  convergence](acceptance/d26-post-reattach-exit.md)
 
 ## Design spikes
 

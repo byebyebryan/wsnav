@@ -1,8 +1,8 @@
 use super::{
     ActionError, CatalogAuthorization, HostRegistry, Instant, LinuxProcessProbe, Path, PathBuf,
-    PrivateRuntime, ProcessProbe, ProviderKind, Revision, RuntimeId, RuntimePaths, RuntimeProbe,
-    StateError, SystemClock, SystemTmux, WorkstreamId, WorkstreamLifecycle,
-    terminate_owned_observer_process, thread,
+    PrivateRuntime, ProcessObservation, ProcessProbe, ProcessState, ProviderKind, Revision,
+    RuntimeId, RuntimePaths, RuntimeProbe, StateError, SystemClock, SystemTmux, WorkstreamId,
+    WorkstreamLifecycle, terminate_owned_observer_process, thread,
 };
 use super::{
     cleanup::{
@@ -48,15 +48,19 @@ pub(crate) fn park_authorized(
     expected_revision: Option<Revision>,
     authorization: CatalogAuthorization,
 ) -> Result<Revision, ActionError> {
-    park_authorized_with_clean_exit_fence(
+    match park_authorized_with_clean_exit_fence(
         root,
         registry,
         workstream_id,
         expected_revision,
         authorization,
         None,
-    )?
-    .ok_or(ActionError::RuntimeProbeAmbiguous)
+    )? {
+        CleanExitParkOutcome::Parked(revision) => Ok(revision),
+        CleanExitParkOutcome::NotClean | CleanExitParkOutcome::RetryableGroupDrain => {
+            Err(ActionError::RuntimeProbeAmbiguous)
+        }
+    }
 }
 
 /// Parks a Runtime only if this helper establishes that its exact native
@@ -77,14 +81,21 @@ pub(crate) fn park_authorized_if_clean_provider_exit(
         generation: &expected_runtime.tmux_generation,
         revision: expected_runtime.revision,
     };
-    park_authorized_with_clean_exit_fence(
+    match park_authorized_with_clean_exit_fence(
         root,
         registry,
         workstream_id,
         Some(expected_revision),
         authorization,
         Some(fence),
-    )
+    )? {
+        CleanExitParkOutcome::Parked(revision) => Ok(Some(revision)),
+        CleanExitParkOutcome::NotClean => Ok(None),
+        // Ordinary attachment preflight deliberately retains its existing
+        // fail-closed behavior. Only the returned native attachment helper
+        // receives the typed, bounded retry authority below.
+        CleanExitParkOutcome::RetryableGroupDrain => Err(ActionError::RuntimeProbeAmbiguous),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -94,6 +105,17 @@ struct CleanExitFence<'a> {
     revision: Revision,
 }
 
+/// Result of a clean-exit finalization attempt. `RetryableGroupDrain` is
+/// deliberately narrower than an action error: the exact native zero-status
+/// candidate was re-proven, but its recorded process group has not yet drained.
+/// No other missing, changed, or malformed evidence is retryable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CleanExitParkOutcome {
+    Parked(Revision),
+    NotClean,
+    RetryableGroupDrain,
+}
+
 fn park_authorized_with_clean_exit_fence(
     root: &crate::state::StateRoot,
     registry: &mut HostRegistry,
@@ -101,7 +123,7 @@ fn park_authorized_with_clean_exit_fence(
     expected_revision: Option<Revision>,
     authorization: CatalogAuthorization,
     clean_exit_fence: Option<CleanExitFence<'_>>,
-) -> Result<Option<Revision>, ActionError> {
+) -> Result<CleanExitParkOutcome, ActionError> {
     let overview = workstream_overview_authorized(registry, workstream_id, authorization)?;
     if expected_revision.is_some_and(|expected| expected != overview.revision) {
         return Err(ActionError::WorkstreamRevisionConflict);
@@ -121,14 +143,16 @@ fn park_authorized_with_clean_exit_fence(
     );
     let probe = runtime.probe()?;
     let promoted_cwd = promoted_onboarding_cwd(root, registry, &record)?;
-    let clean_provider_exit = clean_provider_exit_status_with_cwd_proof(
+    let (clean_provider_exit, provider_already_exited) = inspect_park_provider_exit(
         &runtime,
         &record,
         &probe,
         promoted_cwd.as_deref(),
-    )? == Some(0);
+        &process_probe,
+        clean_exit_fence.is_some(),
+    )?;
     if clean_exit_fence.is_some() && !clean_provider_exit {
-        return Ok(None);
+        return Ok(CleanExitParkOutcome::NotClean);
     }
     match probe {
         probe @ RuntimeProbe::Live { .. } if matches_recorded_runtime(&record, &probe, false) => {}
@@ -160,7 +184,9 @@ fn park_authorized_with_clean_exit_fence(
         }
     }
     if let Some(fence) = clean_exit_fence {
-        await_recorded_provider_group_empty(&record)?;
+        if await_recorded_provider_group_empty(&record)? == ProviderGroupDrain::Pending {
+            return Ok(CleanExitParkOutcome::RetryableGroupDrain);
+        }
         // Re-read durable records and retained-pane facts before cleanup.
         let final_overview =
             workstream_overview_authorized(registry, workstream_id, authorization)?;
@@ -184,20 +210,19 @@ fn park_authorized_with_clean_exit_fence(
         );
         let final_probe = runtime.probe()?;
         let final_promoted_cwd = promoted_onboarding_cwd(root, registry, &final_record)?;
-        if clean_provider_exit_status_with_cwd_proof(
+        let final_exit_status = clean_provider_exit_status_with_cwd_proof(
             &runtime,
             &final_record,
             &final_probe,
             final_promoted_cwd.as_deref(),
-        )? != Some(0)
-            || !recorded_provider_group_is_empty(&final_record)?
-        {
-            return Err(ActionError::RuntimeProbeAmbiguous);
-        }
+        )?;
+        require_final_clean_exit_fence_with(final_exit_status, || {
+            recorded_provider_group_is_empty(&final_record)
+        })?;
         record = final_record;
     }
-    finalize_park(registry, &record, &runtime, clean_exit_fence.is_some())?;
-    workstream_revision(registry, workstream_id).map(Some)
+    finalize_park(registry, &record, &runtime, provider_already_exited)?;
+    workstream_revision(registry, workstream_id).map(CleanExitParkOutcome::Parked)
 }
 
 fn clean_exit_fence_matches(
@@ -207,6 +232,85 @@ fn clean_exit_fence_matches(
     record.runtime_id == fence.id
         && record.tmux_generation == fence.generation
         && record.revision == fence.revision
+}
+
+fn inspect_park_provider_exit(
+    runtime: &PrivateRuntime<'_>,
+    record: &crate::state::RuntimeRecord,
+    probe: &RuntimeProbe,
+    promoted_cwd: Option<&Path>,
+    process_probe: &dyn ProcessProbe,
+    clean_exit_fenced: bool,
+) -> Result<(bool, bool), ActionError> {
+    let clean_provider_exit =
+        clean_provider_exit_status_with_cwd_proof(runtime, record, probe, promoted_cwd)? == Some(0);
+    let provider_already_exited = if clean_exit_fenced {
+        true
+    } else {
+        stopped_missing_provider_already_exited(record, probe, process_probe)?
+    };
+    Ok((clean_provider_exit, provider_already_exited))
+}
+
+/// Recognizes the narrow case where a durable stopped Runtime has already
+/// lost its private tmux server and therefore must not signal its former
+/// provider group again. An absent provider, or the exact same-birth zombie,
+/// is conclusive only while the recorded group ID is empty. A live exact
+/// provider remains eligible for the ordinary identity-proven stop path;
+/// changed, partial, or unreadable evidence refuses immediately.
+fn stopped_missing_provider_already_exited(
+    record: &crate::state::RuntimeRecord,
+    probe: &RuntimeProbe,
+    process_probe: &dyn ProcessProbe,
+) -> Result<bool, ActionError> {
+    if record.status != crate::domain::RuntimeStatus::Stopped
+        || !matches!(probe, RuntimeProbe::Missing)
+    {
+        return Ok(false);
+    }
+    match (record.provider_pid, record.process_birth.as_deref()) {
+        (None, None) => Ok(true),
+        (Some(provider_pid), Some(expected_birth)) => {
+            let observation = process_probe
+                .process_observation_checked(provider_pid)
+                .map_err(|_| ActionError::RuntimeProbeAmbiguous)?;
+            exact_stopped_provider_absence_with(expected_birth, observation, || {
+                recorded_provider_group_is_empty(record)
+            })
+        }
+        _ => Err(ActionError::RuntimeProbeAmbiguous),
+    }
+}
+
+pub(super) fn exact_stopped_provider_absence_with<G>(
+    expected_birth: &str,
+    observation: Option<ProcessObservation>,
+    group_is_empty: G,
+) -> Result<bool, ActionError>
+where
+    G: FnOnce() -> Result<bool, ActionError>,
+{
+    if expected_birth.is_empty() {
+        return Err(ActionError::RuntimeProbeAmbiguous);
+    }
+    match observation {
+        Some(observation) if observation.birth != expected_birth => {
+            return Err(ActionError::RuntimeProbeAmbiguous);
+        }
+        Some(ProcessObservation {
+            state: ProcessState::Running,
+            ..
+        }) => return Ok(false),
+        Some(ProcessObservation {
+            state: ProcessState::Zombie,
+            ..
+        })
+        | None => {}
+    }
+    if !group_is_empty()? {
+        return Err(ActionError::RuntimeProbeAmbiguous);
+    }
+    Ok(true)
 }
 
 fn finalize_park(
@@ -223,11 +327,11 @@ fn finalize_park(
         .as_ref()
         .and_then(|handle| stop_opencode_observer(handle).err());
     let stop_provider = if provider_already_exited {
-        // The exact retained-pane proof above includes the recorded pane PID,
-        // cwd, dead topology, zero native status, and its absence (or the
-        // narrow stable-zombie fallback). Re-running generic group shutdown
-        // after that native exit can observe a disappearing former member but
-        // cannot establish group ownership; leave that path fail-closed.
+        // Either the exact retained-pane clean-exit proof, or the durable
+        // stopped/missing Runtime proof above, established that no live member
+        // remains in the recorded group. Re-running generic group shutdown
+        // after that terminal evidence could only target a disappearing or
+        // reused numeric identity, so never signal from this path.
         Ok(())
     } else {
         stop_recorded_provider_if_present(record)
@@ -261,9 +365,10 @@ fn finalize_park(
     Ok(())
 }
 
-/// Reconciles the return from one native tmux attachment. `false` means the
-/// exact provider remains live and the client merely detached. `true` means
-/// the exact provider pane exited normally and its Runtime was parked.
+/// Reconciles the return from one native tmux attachment. A returned
+/// [`AttachmentEndDisposition::RetryableCleanExit`] proves a zero-status native
+/// exit candidate but no more: its final recorded process-group drain was not
+/// ready, so the caller must renew the entire proof before it may park.
 ///
 /// # Errors
 ///
@@ -275,7 +380,8 @@ pub(crate) fn reconcile_provider_attachment_end(
     workstream_id: WorkstreamId,
     expected_runtime_id: RuntimeId,
     expected_runtime_generation: &str,
-) -> Result<bool, ActionError> {
+    retry_fence: Option<AttachmentEndRetryFence>,
+) -> Result<AttachmentEndDisposition, ActionError> {
     let overview = workstream_overview_authorized(
         registry,
         workstream_id,
@@ -289,6 +395,11 @@ pub(crate) fn reconcile_provider_attachment_end(
     {
         return Err(ActionError::RuntimeProbeAmbiguous);
     }
+    if retry_fence.is_some_and(|fence| {
+        overview.revision != fence.workstream_revision || record.revision != fence.runtime_revision
+    }) {
+        return Err(ActionError::RuntimeProbeAmbiguous);
+    }
     let tmux = SystemTmux::default();
     let process_probe = LinuxProcessProbe;
     let runtime = PrivateRuntime::new(
@@ -299,7 +410,7 @@ pub(crate) fn reconcile_provider_attachment_end(
     let probe = runtime.probe()?;
     let promoted_cwd = promoted_onboarding_cwd(root, registry, &record)?;
     let exit_status = match attachment_end_provider_state(&record, &probe, &process_probe)? {
-        AttachmentEndProviderState::Live => return Ok(false),
+        AttachmentEndProviderState::Live => return Ok(AttachmentEndDisposition::Detached),
         AttachmentEndProviderState::ExitPending => {
             await_clean_provider_exit_status(&runtime, &record, &probe, promoted_cwd.as_deref())?
         }
@@ -313,16 +424,47 @@ pub(crate) fn reconcile_provider_attachment_end(
     if exit_status != Some(0) {
         return Err(ActionError::RuntimeProbeAmbiguous);
     }
-    park_authorized_if_clean_provider_exit(
+    let fence = CleanExitFence {
+        id: record.runtime_id,
+        generation: &record.tmux_generation,
+        revision: record.revision,
+    };
+    match park_authorized_with_clean_exit_fence(
         root,
         registry,
         workstream_id,
-        overview.revision,
-        &record,
+        Some(overview.revision),
         CatalogAuthorization::ArchivedAllowed,
-    )?
-    .ok_or(ActionError::RuntimeProbeAmbiguous)?;
-    Ok(true)
+        Some(fence),
+    )? {
+        CleanExitParkOutcome::Parked(_) => Ok(AttachmentEndDisposition::Complete),
+        CleanExitParkOutcome::RetryableGroupDrain => Ok(
+            AttachmentEndDisposition::RetryableCleanExit(AttachmentEndRetryFence {
+                workstream_revision: overview.revision,
+                runtime_revision: record.revision,
+            }),
+        ),
+        CleanExitParkOutcome::NotClean => Err(ActionError::RuntimeProbeAmbiguous),
+    }
+}
+
+/// Typed attachment-end result. Errors from
+/// [`reconcile_provider_attachment_end`] are terminal refusals; only the
+/// explicit retryable variant may enter D26's dedicated helper retry window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AttachmentEndDisposition {
+    Detached,
+    Complete,
+    RetryableCleanExit(AttachmentEndRetryFence),
+}
+
+/// Durable revisions captured only after an exact native zero-status candidate
+/// reaches the final group-drain fence. A later retry must present these same
+/// revisions before any new proof or mutation is considered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AttachmentEndRetryFence {
+    pub(crate) workstream_revision: Revision,
+    pub(crate) runtime_revision: Revision,
 }
 
 /// Classifies the one transition that can race the `pane-died` detach hook.
@@ -462,22 +604,28 @@ pub(super) fn clean_provider_exit_status_with_cwd_proof(
 /// members after a native clean-exit proof. The vanished leader means that a
 /// non-empty group cannot safely be signalled: wait for its observed members
 /// to drain, then refuse rather than infer historical ownership.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProviderGroupDrain {
+    Empty,
+    Pending,
+}
+
 fn await_recorded_provider_group_empty(
     record: &crate::state::RuntimeRecord,
-) -> Result<(), ActionError> {
+) -> Result<ProviderGroupDrain, ActionError> {
     let deadline = Instant::now() + PARK_CONFIRM_TIMEOUT;
-    await_provider_group_empty_with(
+    await_provider_group_drain_with(
         || recorded_provider_group_is_empty(record),
         || Instant::now() < deadline,
         || thread::sleep(PARK_CONFIRM_POLL_INTERVAL),
     )
 }
 
-pub(super) fn await_provider_group_empty_with<R, C, W>(
+fn await_provider_group_drain_with<R, C, W>(
     mut group_is_empty: R,
     mut before_deadline: C,
     mut wait: W,
-) -> Result<(), ActionError>
+) -> Result<ProviderGroupDrain, ActionError>
 where
     R: FnMut() -> Result<bool, ActionError>,
     C: FnMut() -> bool,
@@ -485,12 +633,29 @@ where
 {
     loop {
         if group_is_empty()? {
-            return Ok(());
+            return Ok(ProviderGroupDrain::Empty);
         }
         if !before_deadline() {
-            return Err(ActionError::RuntimeProbeAmbiguous);
+            return Ok(ProviderGroupDrain::Pending);
         }
         wait();
+    }
+}
+
+#[cfg(test)]
+pub(super) fn await_provider_group_empty_with<R, C, W>(
+    group_is_empty: R,
+    before_deadline: C,
+    wait: W,
+) -> Result<(), ActionError>
+where
+    R: FnMut() -> Result<bool, ActionError>,
+    C: FnMut() -> bool,
+    W: FnMut(),
+{
+    match await_provider_group_drain_with(group_is_empty, before_deadline, wait)? {
+        ProviderGroupDrain::Empty => Ok(()),
+        ProviderGroupDrain::Pending => Err(ActionError::RuntimeProbeAmbiguous),
     }
 }
 
@@ -502,6 +667,25 @@ fn recorded_provider_group_is_empty(
         .process_group_members_by_id_checked(provider_pid)
         .map(|members| members.is_empty())
         .map_err(|_| ActionError::RuntimeProbeAmbiguous)
+}
+
+/// Requires the final clean-exit proof to remain exact after the recorded
+/// group was already observed empty. A changed exit proof or reappearing group
+/// is new ambiguity, not continued drain, and must never reopen retry authority.
+pub(super) fn require_final_clean_exit_fence_with<G>(
+    exit_status: Option<i32>,
+    group_is_empty: G,
+) -> Result<(), ActionError>
+where
+    G: FnOnce() -> Result<bool, ActionError>,
+{
+    if exit_status != Some(0) {
+        return Err(ActionError::RuntimeProbeAmbiguous);
+    }
+    if !group_is_empty()? {
+        return Err(ActionError::RuntimeProbeAmbiguous);
+    }
+    Ok(())
 }
 
 /// Returns the exact canonical project cwd from one still-starting,

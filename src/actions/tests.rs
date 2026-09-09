@@ -11,8 +11,9 @@ use super::{
     creation::{IndependentStartSpec, start_independent_workstream_with},
     forget,
     lifecycle::{
-        AttachmentEndProviderState, attachment_end_provider_state,
+        AttachmentEndDisposition, AttachmentEndProviderState, attachment_end_provider_state,
         await_pending_exit_evidence_with, await_provider_group_empty_with,
+        exact_stopped_provider_absence_with, require_final_clean_exit_fence_with,
     },
     model::reconcile_observer_trust_with_manager,
     park, preflight_attachment, preflight_attachment_read_only,
@@ -233,6 +234,19 @@ impl Drop for DisposableRuntimeGuard {
     }
 }
 
+/// Releases a controlled fixture child before its private tmux Runtime is
+/// torn down. This keeps the process-group-drain cases self-cleaning even
+/// when an assertion panics before the test reaches its explicit release.
+struct FixtureReleaseGuard {
+    release_path: PathBuf,
+}
+
+impl Drop for FixtureReleaseGuard {
+    fn drop(&mut self) {
+        let _ = fs::write(&self.release_path, b"release");
+    }
+}
+
 fn live_runtime_for_read_only_test(
     provider: ProviderKind,
 ) -> (
@@ -248,6 +262,36 @@ fn live_runtime_for_read_only_test(
 fn live_runtime_for_read_only_test_with_program(
     provider: ProviderKind,
     shell_program: &str,
+) -> (
+    tempfile::TempDir,
+    crate::state::StateRoot,
+    crate::state::RuntimeRecord,
+    WorkstreamId,
+    DisposableRuntimeGuard,
+) {
+    live_runtime_for_read_only_test_with_program_and_opencode_handle(provider, shell_program, false)
+}
+
+fn live_opencode_runtime_for_attachment_end_test(
+    shell_program: &str,
+) -> (
+    tempfile::TempDir,
+    crate::state::StateRoot,
+    crate::state::RuntimeRecord,
+    WorkstreamId,
+    DisposableRuntimeGuard,
+) {
+    live_runtime_for_read_only_test_with_program_and_opencode_handle(
+        ProviderKind::OpenCode,
+        shell_program,
+        true,
+    )
+}
+
+fn live_runtime_for_read_only_test_with_program_and_opencode_handle(
+    provider: ProviderKind,
+    shell_program: &str,
+    record_opencode_handle: bool,
 ) -> (
     tempfile::TempDir,
     crate::state::StateRoot,
@@ -315,6 +359,27 @@ fn live_runtime_for_read_only_test_with_program(
             &process_birth,
         )
         .unwrap();
+    if record_opencode_handle {
+        assert_eq!(provider, ProviderKind::OpenCode);
+        let session = ProviderSessionId::new(ProviderKind::OpenCode, "fixture-session").unwrap();
+        registry
+            .bind_opencode_session(
+                runtime_record.runtime_id,
+                &runtime_record.tmux_generation,
+                &session,
+                "resume",
+            )
+            .unwrap();
+        registry
+            .record_opencode_runtime_handle(
+                runtime_record.runtime_id,
+                &runtime_record.tmux_generation,
+                31_337,
+                "fixture-version",
+                &session,
+            )
+            .unwrap();
+    }
     drop(registry);
     let connection = Connection::open(root.host_database_path()).unwrap();
     connection
@@ -439,15 +504,17 @@ fn attachment_end_keeps_an_exact_live_provider_unchanged_after_detach() {
         .find(|overview| overview.workstream_id == workstream_id)
         .unwrap();
 
-    assert!(
-        !reconcile_provider_attachment_end(
+    assert_eq!(
+        reconcile_provider_attachment_end(
             &root,
             &mut registry,
             workstream_id,
             record.runtime_id,
             &record.tmux_generation,
+            None,
         )
-        .unwrap()
+        .unwrap(),
+        AttachmentEndDisposition::Detached,
     );
 
     let after = registry
@@ -509,15 +576,17 @@ fn attachment_end_parks_an_exact_provider_that_exited_normally() {
         .into_host_registry()
         .unwrap();
 
-    assert!(
+    assert_eq!(
         reconcile_provider_attachment_end(
             &root,
             &mut registry,
             workstream_id,
             record.runtime_id,
             &record.tmux_generation,
+            None,
         )
-        .unwrap()
+        .unwrap(),
+        AttachmentEndDisposition::Complete,
     );
 
     let after = registry
@@ -533,6 +602,218 @@ fn attachment_end_parks_an_exact_provider_that_exited_normally() {
         crate::domain::RuntimeStatus::Stopped
     );
     assert!(!paths.directory.exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn attachment_end_opencode_retries_only_a_draining_exact_zero_exit() {
+    if Command::new("tmux")
+        .arg("-V")
+        .spawn()
+        .and_then(std::process::Child::wait_with_output)
+        .is_err()
+    {
+        eprintln!("skipped: tmux is unavailable");
+        return;
+    }
+
+    let (_temporary, root, record, workstream_id, _runtime_guard) =
+        live_opencode_runtime_for_attachment_end_test(
+            "nohup sh -c 'while [ ! -e .wsnav-test-group-release ]; do sleep 0.01; done' </dev/null >/dev/null 2>&1 &\
+             while [ ! -e .wsnav-test-exit ]; do sleep 0.01; done; exit 0",
+        );
+    let _group_release = FixtureReleaseGuard {
+        release_path: record.cwd.join(".wsnav-test-group-release"),
+    };
+    let paths =
+        RuntimePaths::for_record(root.base(), record.runtime_id, &record.tmux_session).unwrap();
+    release_provider_and_wait_for_retained_exit(&root, &record, 0);
+
+    let mut registry = crate::state::open_current(&root)
+        .unwrap()
+        .into_host_registry()
+        .unwrap();
+    let retry_fence = match reconcile_provider_attachment_end(
+        &root,
+        &mut registry,
+        workstream_id,
+        record.runtime_id,
+        &record.tmux_generation,
+        None,
+    )
+    .unwrap()
+    {
+        AttachmentEndDisposition::RetryableCleanExit(fence) => fence,
+        other => panic!("expected only a draining clean-exit retry, got {other:?}"),
+    };
+    assert!(
+        registry
+            .opencode_runtime_handle(record.runtime_id)
+            .unwrap()
+            .is_some()
+    );
+    drop(registry);
+
+    fs::write(record.cwd.join(".wsnav-test-group-release"), b"release").unwrap();
+    let mut registry = crate::state::open_current(&root)
+        .unwrap()
+        .into_host_registry()
+        .unwrap();
+    assert_eq!(
+        reconcile_provider_attachment_end(
+            &root,
+            &mut registry,
+            workstream_id,
+            record.runtime_id,
+            &record.tmux_generation,
+            Some(retry_fence),
+        )
+        .unwrap(),
+        AttachmentEndDisposition::Complete,
+    );
+    let overview = registry
+        .workstream_overviews()
+        .unwrap()
+        .into_iter()
+        .find(|overview| overview.workstream_id == workstream_id)
+        .unwrap();
+    assert_eq!(overview.lifecycle, WorkstreamLifecycle::Parked);
+    assert_eq!(
+        overview.runtime.unwrap().status,
+        crate::domain::RuntimeStatus::Stopped
+    );
+    assert!(
+        registry
+            .opencode_runtime_handle(record.runtime_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!paths.directory.exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn attachment_end_opencode_refuses_a_changed_revision_before_retry() {
+    if Command::new("tmux")
+        .arg("-V")
+        .spawn()
+        .and_then(std::process::Child::wait_with_output)
+        .is_err()
+    {
+        eprintln!("skipped: tmux is unavailable");
+        return;
+    }
+
+    let (_temporary, root, record, workstream_id, _runtime_guard) =
+        live_opencode_runtime_for_attachment_end_test(
+            "nohup sh -c 'while [ ! -e .wsnav-test-group-release ]; do sleep 0.01; done' </dev/null >/dev/null 2>&1 &\
+             while [ ! -e .wsnav-test-exit ]; do sleep 0.01; done; exit 0",
+        );
+    let _group_release = FixtureReleaseGuard {
+        release_path: record.cwd.join(".wsnav-test-group-release"),
+    };
+    let paths =
+        RuntimePaths::for_record(root.base(), record.runtime_id, &record.tmux_session).unwrap();
+    release_provider_and_wait_for_retained_exit(&root, &record, 0);
+    let mut registry = crate::state::open_current(&root)
+        .unwrap()
+        .into_host_registry()
+        .unwrap();
+    let retry_fence = match reconcile_provider_attachment_end(
+        &root,
+        &mut registry,
+        workstream_id,
+        record.runtime_id,
+        &record.tmux_generation,
+        None,
+    )
+    .unwrap()
+    {
+        AttachmentEndDisposition::RetryableCleanExit(fence) => fence,
+        other => panic!("expected only a draining clean-exit retry, got {other:?}"),
+    };
+    drop(registry);
+
+    let connection = Connection::open(root.host_database_path()).unwrap();
+    connection
+        .execute(
+            "UPDATE runtimes SET revision = revision + 1 WHERE runtime_id = ?1",
+            [record.runtime_id.to_string()],
+        )
+        .unwrap();
+    drop(connection);
+    let before_refusal_bytes = host_database_bytes(&root);
+    let mut registry = crate::state::open_current(&root)
+        .unwrap()
+        .into_host_registry()
+        .unwrap();
+    assert!(matches!(
+        reconcile_provider_attachment_end(
+            &root,
+            &mut registry,
+            workstream_id,
+            record.runtime_id,
+            &record.tmux_generation,
+            Some(retry_fence),
+        ),
+        Err(ActionError::RuntimeProbeAmbiguous)
+    ));
+    assert!(
+        registry
+            .opencode_runtime_handle(record.runtime_id)
+            .unwrap()
+            .is_some()
+    );
+    drop(registry);
+    assert_eq!(host_database_bytes(&root), before_refusal_bytes);
+    assert!(paths.directory.exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn attachment_end_opencode_nonzero_exit_is_not_retryable_or_mutated() {
+    if Command::new("tmux")
+        .arg("-V")
+        .spawn()
+        .and_then(std::process::Child::wait_with_output)
+        .is_err()
+    {
+        eprintln!("skipped: tmux is unavailable");
+        return;
+    }
+
+    let (_temporary, root, record, workstream_id, _runtime_guard) =
+        live_opencode_runtime_for_attachment_end_test(
+            "while [ ! -e .wsnav-test-exit ]; do sleep 0.01; done; exit 7",
+        );
+    let paths =
+        RuntimePaths::for_record(root.base(), record.runtime_id, &record.tmux_session).unwrap();
+    release_provider_and_wait_for_retained_exit(&root, &record, 7);
+    let before_refusal_bytes = host_database_bytes(&root);
+    let mut registry = crate::state::open_current(&root)
+        .unwrap()
+        .into_host_registry()
+        .unwrap();
+    assert!(matches!(
+        reconcile_provider_attachment_end(
+            &root,
+            &mut registry,
+            workstream_id,
+            record.runtime_id,
+            &record.tmux_generation,
+            None,
+        ),
+        Err(ActionError::RuntimeProbeAmbiguous)
+    ));
+    assert!(
+        registry
+            .opencode_runtime_handle(record.runtime_id)
+            .unwrap()
+            .is_some()
+    );
+    drop(registry);
+    assert_eq!(host_database_bytes(&root), before_refusal_bytes);
+    assert!(paths.directory.exists());
 }
 
 #[test]
@@ -854,6 +1135,7 @@ fn attachment_end_refuses_a_nonzero_provider_exit_without_mutation() {
             workstream_id,
             record.runtime_id,
             &record.tmux_generation,
+            None,
         ),
         Err(ActionError::RuntimeProbeAmbiguous)
     ));
@@ -2442,6 +2724,86 @@ fn clean_exit_group_drain_requires_an_empty_read_or_refuses() {
             || panic!("probe failure must not be retried"),
             || panic!("probe failure must not wait"),
         ),
+        Err(ActionError::RuntimeProbeAmbiguous)
+    ));
+}
+
+#[test]
+fn final_clean_exit_fence_never_retries_changed_or_reappeared_evidence() {
+    assert!(matches!(
+        require_final_clean_exit_fence_with(None, || {
+            panic!("changed exit proof must refuse before another group read")
+        }),
+        Err(ActionError::RuntimeProbeAmbiguous)
+    ));
+    assert!(matches!(
+        require_final_clean_exit_fence_with(Some(7), || {
+            panic!("nonzero exit must refuse before another group read")
+        }),
+        Err(ActionError::RuntimeProbeAmbiguous)
+    ));
+    assert!(matches!(
+        require_final_clean_exit_fence_with(Some(0), || Ok(false)),
+        Err(ActionError::RuntimeProbeAmbiguous)
+    ));
+    assert!(matches!(
+        require_final_clean_exit_fence_with(Some(0), || {
+            Err(ActionError::RuntimeProbeAmbiguous)
+        }),
+        Err(ActionError::RuntimeProbeAmbiguous)
+    ));
+    assert!(require_final_clean_exit_fence_with(Some(0), || Ok(true)).is_ok());
+}
+
+#[test]
+fn stopped_missing_provider_requires_exact_terminal_identity_and_an_empty_group() {
+    let running = ProcessObservation {
+        birth: "birth-a".to_owned(),
+        state: ProcessState::Running,
+    };
+    assert!(
+        !exact_stopped_provider_absence_with("birth-a", Some(running), || {
+            panic!("an exact live provider must continue through generic group shutdown")
+        })
+        .unwrap()
+    );
+
+    let zombie = ProcessObservation {
+        birth: "birth-a".to_owned(),
+        state: ProcessState::Zombie,
+    };
+    assert!(
+        exact_stopped_provider_absence_with("birth-a", Some(zombie.clone()), || Ok(true)).unwrap()
+    );
+    assert!(exact_stopped_provider_absence_with("birth-a", None, || Ok(true)).unwrap());
+
+    for observation in [Some(zombie), None] {
+        assert!(matches!(
+            exact_stopped_provider_absence_with("birth-a", observation.clone(), || Ok(false)),
+            Err(ActionError::RuntimeProbeAmbiguous)
+        ));
+        assert!(matches!(
+            exact_stopped_provider_absence_with("birth-a", observation, || {
+                Err(ActionError::RuntimeProbeAmbiguous)
+            }),
+            Err(ActionError::RuntimeProbeAmbiguous)
+        ));
+    }
+
+    let changed = ProcessObservation {
+        birth: "birth-b".to_owned(),
+        state: ProcessState::Zombie,
+    };
+    assert!(matches!(
+        exact_stopped_provider_absence_with("birth-a", Some(changed), || {
+            panic!("a changed identity must refuse before group inspection")
+        }),
+        Err(ActionError::RuntimeProbeAmbiguous)
+    ));
+    assert!(matches!(
+        exact_stopped_provider_absence_with("", None, || {
+            panic!("an invalid identity must refuse before group inspection")
+        }),
         Err(ActionError::RuntimeProbeAmbiguous)
     ));
 }
